@@ -53,22 +53,17 @@ def validate_sql(sql: str) -> tuple[bool, str]:
 def execute_sql(sql: str) -> tuple[pd.DataFrame | None, str | None]:
     """
     Run SQL via Supabase RPC. Returns (dataframe, error_message).
-    Requires an RPC function `execute_readonly_sql` to be created in Supabase
-    (see supabase_setup.sql).
+    Requires an RPC function `execute_readonly_sql` to be created in Supabase.
     """
     is_safe, err = validate_sql(sql)
     if not is_safe:
         return None, f"❌ SQL ถูกบล็อก: {err}"
 
-    # สำคัญ: ตัด ; ท้าย query ก่อนส่งไป Supabase
-    # เพราะ RPC ห่อ query ด้วย subquery แบบ "SELECT json_agg(t) FROM (%s) t"
-    # ถ้ามี ; หลุดเข้าไปข้างใน parentheses จะกลายเป็น syntax error
-    cleaned_sql = sql.strip().rstrip(";").strip()
-
     client = get_supabase_client()
 
     try:
-        result = client.rpc("execute_readonly_sql", {"query_text": cleaned_sql}).execute()
+        # Call the RPC we'll create in Supabase (see README for setup)
+        result = client.rpc("execute_readonly_sql", {"query_text": sql}).execute()
         data = result.data
 
         if data is None or (isinstance(data, list) and len(data) == 0):
