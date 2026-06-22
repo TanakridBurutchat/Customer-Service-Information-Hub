@@ -31,7 +31,7 @@ OUTPUT_FORMAT = {
 # ──────────────────────────────────────────────────────────────────────
 # GEMINI MODEL
 # ──────────────────────────────────────────────────────────────────────
-GEMINI_MODEL = "gemini-2.0-flash-exp"   # เร็ว + ฟรี tier ใหญ่
+GEMINI_MODEL = "gemini-3.1-flash-lite"   # เร็ว + ฟรี tier ใหญ่
 # GEMINI_MODEL = "gemini-1.5-pro"       # ฉลาดกว่า แต่ช้ากว่า + จำกัด quota
 GEMINI_TEMPERATURE = 0.1                 # ต่ำ = SQL คงเส้นคงวา ไม่มั่ว
 
