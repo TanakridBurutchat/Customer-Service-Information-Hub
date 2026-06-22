@@ -1,10 +1,13 @@
 """
-Gemini LLM wrapper — text-to-SQL pipeline
+Gemini LLM wrapper — text-to-SQL pipeline (2-pass)
+Pass 1: user question -> SQL
+Pass 2: SQL result -> natural language answer
 """
 import re
 import streamlit as st
+import pandas as pd
 import google.generativeai as genai
-from config import GEMINI_MODEL, GEMINI_TEMPERATURE, build_system_prompt
+from config import GEMINI_MODEL, GEMINI_TEMPERATURE, build_system_prompt, build_answer_prompt
 
 
 def _init_gemini():
@@ -15,7 +18,7 @@ def _init_gemini():
 
 
 def get_model() -> genai.GenerativeModel:
-    """Return cached GenerativeModel instance."""
+    """Return cached GenerativeModel instance for SQL generation (pass 1)."""
     _init_gemini()
     if "gemini_model" not in st.session_state:
         st.session_state.gemini_model = genai.GenerativeModel(
@@ -29,9 +32,23 @@ def get_model() -> genai.GenerativeModel:
     return st.session_state.gemini_model
 
 
+def get_answer_model() -> genai.GenerativeModel:
+    """Return cached GenerativeModel instance for natural-language answers (pass 2)."""
+    _init_gemini()
+    if "gemini_answer_model" not in st.session_state:
+        st.session_state.gemini_answer_model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            generation_config={
+                "temperature": 0.4,  # นิดหน่อยให้ดูเป็นธรรมชาติ ไม่แข็งทื่อ
+                "max_output_tokens": 512,
+            },
+        )
+    return st.session_state.gemini_answer_model
+
+
 def generate_answer(user_question: str):
     """
-    Stream Gemini response. Yields text chunks.
+    Pass 1: Stream Gemini response (SQL + brief explanation). Yields text chunks.
     """
     model = get_model()
     try:
@@ -41,6 +58,41 @@ def generate_answer(user_question: str):
                 yield chunk.text
     except Exception as e:
         yield f"\n\n❌ Gemini error: {str(e)[:300]}"
+
+
+def _df_to_summary_text(df: pd.DataFrame, max_rows: int = 15) -> str:
+    """Convert a result dataframe into compact text for the LLM to read."""
+    if df is None or df.empty:
+        return "(ไม่มีข้อมูล — query คืนค่าว่าง)"
+
+    n_rows = len(df)
+    n_cols = len(df.columns)
+
+    # Special case: single cell result (e.g. COUNT(*))
+    if n_rows == 1 and n_cols == 1:
+        col = df.columns[0]
+        val = df.iloc[0, 0]
+        return f"คอลัมน์ '{col}' มีค่า = {val}"
+
+    # Otherwise: show row count + sample rows as text
+    preview = df.head(max_rows).to_dict(orient="records")
+    more_note = f"\n(...และอีก {n_rows - max_rows} แถว)" if n_rows > max_rows else ""
+    return f"จำนวนแถวทั้งหมด: {n_rows}\nตัวอย่างข้อมูล:\n{preview}{more_note}"
+
+
+def generate_natural_answer(user_question: str, sql: str, df: pd.DataFrame) -> str:
+    """
+    Pass 2: Summarize the actual query result into natural Thai language.
+    """
+    result_summary = _df_to_summary_text(df)
+    prompt = build_answer_prompt(user_question, sql, result_summary)
+
+    model = get_answer_model()
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"(สรุปคำตอบไม่สำเร็จ: {str(e)[:200]})"
 
 
 def parse_response(text: str) -> tuple[str | None, str]:
@@ -53,15 +105,11 @@ def parse_response(text: str) -> tuple[str | None, str]:
         ---
         explanation text
     """
-    # Try to extract SQL from code block
     sql_match = re.search(r"```sql\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not sql_match:
-        # No SQL found — likely OUT_OF_SCOPE
         return None, text.strip()
 
     sql = sql_match.group(1).strip()
-
-    # Get text after the SQL block (and after --- if present)
     remainder = text[sql_match.end():].strip()
     remainder = re.sub(r"^---\s*", "", remainder, flags=re.MULTILINE).strip()
 
