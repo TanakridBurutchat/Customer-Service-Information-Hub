@@ -132,7 +132,7 @@ def render_history_item(msg: dict):
                 if msg.get("natural_answer"):
                     st.markdown(msg["natural_answer"])
                 if msg.get("df_json") is not None:
-                    df = pd.read_json(msg["df_json"], orient="split")
+                    df = pd.read_json(io.StringIO(msg["df_json"]), orient="split")
                     render_table(df)
             if msg.get("sql") and OUTPUT_FORMAT["show_sql"]:
                 with st.expander("📜 SQL ที่ใช้", expanded=False):
