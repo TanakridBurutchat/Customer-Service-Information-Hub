@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 
 from config import APP_USER, APP_PASSWORD, OUTPUT_FORMAT
-from llm import generate_answer, parse_response
+from llm import generate_answer, parse_response, generate_natural_answer
 from db import execute_sql
 
 
@@ -94,11 +94,20 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 
+def is_single_value_result(df: pd.DataFrame) -> bool:
+    """True if result is just 1 row x 1 column (e.g. a COUNT(*))."""
+    return df is not None and not df.empty and df.shape == (1, 1)
+
+
 def render_table(df: pd.DataFrame):
-    """Render result table according to OUTPUT_FORMAT['table_style']."""
+    """Render result table according to OUTPUT_FORMAT['table_style'].
+    Skips rendering entirely for single-value results — those are
+    already spoken in the natural-language answer, a table would be
+    redundant clutter."""
     if df is None or df.empty:
-        st.info("ไม่พบข้อมูลตามเงื่อนไข")
         return
+    if is_single_value_result(df):
+        return  # the number is already in the spoken answer
 
     style = OUTPUT_FORMAT["table_style"]
     if style == "dataframe":
@@ -117,16 +126,17 @@ def render_history_item(msg: dict):
         if msg["role"] == "user":
             st.markdown(msg["content"])
         else:
+            if msg.get("error"):
+                st.error(msg["error"])
+            else:
+                if msg.get("natural_answer"):
+                    st.markdown(msg["natural_answer"])
+                if msg.get("df_json") is not None:
+                    df = pd.read_json(msg["df_json"], orient="split")
+                    render_table(df)
             if msg.get("sql") and OUTPUT_FORMAT["show_sql"]:
                 with st.expander("📜 SQL ที่ใช้", expanded=False):
                     st.code(msg["sql"], language="sql")
-            if msg.get("error"):
-                st.error(msg["error"])
-            elif msg.get("df_json") is not None:
-                df = pd.read_json(msg["df_json"], orient="split")
-                render_table(df)
-            if msg.get("explanation"):
-                st.markdown(msg["explanation"])
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -154,7 +164,7 @@ if user_input:
 
     # Stream assistant response
     with st.chat_message("assistant"):
-        # Stage 1: stream LLM output
+        # ── Pass 1: generate SQL (streamed, shown inside a collapsing status) ──
         with st.status("🧠 กำลังคิด...", expanded=False) as status:
             placeholder = st.empty()
             full_text = ""
@@ -164,26 +174,22 @@ if user_input:
             placeholder.markdown(full_text)
             status.update(label="✅ คิดเสร็จ", state="complete")
 
-        # Stage 2: parse SQL
-        sql, explanation = parse_response(full_text)
+        sql, _raw_explanation = parse_response(full_text)
 
         msg_record = {
             "role": "assistant",
             "sql": sql,
-            "explanation": explanation,
+            "natural_answer": None,
             "df_json": None,
             "error": None,
         }
 
-        # Stage 3: handle OUT_OF_SCOPE or run SQL
         if sql is None:
-            st.warning(explanation or "ไม่สามารถสร้าง SQL ได้")
-            msg_record["error"] = explanation
+            warning_text = _raw_explanation or "ขออภัยครับ ไม่สามารถตอบคำถามนี้ได้ในระบบนี้ครับ"
+            st.warning(warning_text)
+            msg_record["natural_answer"] = warning_text
+            msg_record["error"] = "OUT_OF_SCOPE"
         else:
-            if OUTPUT_FORMAT["show_sql"]:
-                with st.expander("📜 SQL ที่ใช้", expanded=False):
-                    st.code(sql, language="sql")
-
             with st.spinner("🔍 กำลังค้นข้อมูล..."):
                 df, db_err = execute_sql(sql)
 
@@ -191,10 +197,18 @@ if user_input:
                 st.error(db_err)
                 msg_record["error"] = db_err
             else:
+                # ── Pass 2: turn the real result into a friendly Thai answer ──
+                with st.spinner("✍️ กำลังสรุปคำตอบ..."):
+                    natural_answer = generate_natural_answer(user_input, sql, df)
+
+                st.markdown(natural_answer)
                 render_table(df)
+
+                msg_record["natural_answer"] = natural_answer
                 msg_record["df_json"] = df.to_json(orient="split", force_ascii=False)
 
-            if explanation:
-                st.markdown(explanation)
+            if OUTPUT_FORMAT["show_sql"] and sql:
+                with st.expander("📜 SQL ที่ใช้", expanded=False):
+                    st.code(sql, language="sql")
 
         st.session_state.messages.append(msg_record)
