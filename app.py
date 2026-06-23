@@ -3,6 +3,7 @@ NextAI v2 — Text-to-SQL Chatbot
 Streamlit main app
 """
 import json
+import io
 import streamlit as st
 import pandas as pd
 
