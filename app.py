@@ -51,6 +51,14 @@ if not check_password():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Chat history state (Must be initialized BEFORE sidebar)
+# ──────────────────────────────────────────────────────────────────────
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# ──────────────────────────────────────────────────────────────────────
 # Header
 # ──────────────────────────────────────────────────────────────────────
 col_a, col_b = st.columns([5, 1])
@@ -150,14 +158,7 @@ with st.sidebar:
             f"summary:  {OUTPUT_FORMAT['summary']}", language="yaml")
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Chat history state
-# ──────────────────────────────────────────────────────────────────────
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
+# (Moved initialization to top of file)
 
 def is_single_value_result(df: pd.DataFrame) -> bool:
     """True if result is just 1 row x 1 column (e.g. a COUNT(*))."""
