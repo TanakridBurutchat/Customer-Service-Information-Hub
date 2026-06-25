@@ -3,11 +3,12 @@ NextAI v2 — Text-to-SQL Chatbot
 Streamlit main app
 """
 import json
+import uuid
 import io
 import streamlit as st
 import pandas as pd
 
-from config import APP_USER, APP_PASSWORD, OUTPUT_FORMAT
+from config import APP_USERS, OUTPUT_FORMAT
 from llm import generate_answer, parse_response, generate_natural_answer
 from db import execute_sql
 
@@ -36,8 +37,9 @@ def check_password() -> bool:
         submitted = st.form_submit_button("Login", use_container_width=True)
 
     if submitted:
-        if username == APP_USER and password == APP_PASSWORD:
+        if username in APP_USERS and APP_USERS[username] == password:
             st.session_state.authenticated = True
+            st.session_state.username = username
             st.rerun()
         else:
             st.error("❌ Username หรือ Password ไม่ถูกต้อง")
@@ -62,40 +64,97 @@ with col_b:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Sidebar: example questions
+# Sidebar: Chat History & Examples
 # ──────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("💡 ลองถามคำถามเหล่านี้")
-    examples = [
-        "มีสัญญาทั้งหมดกี่สัญญา",
-        "ลูกค้าค้างชำระกี่คน",
-        "สรุปสถานะสัญญาทั้งระบบ",
-        "หาลูกค้าชื่อวิชา ผ่อนถึงงวดไหน",
-        "ลูกค้าที่ประกัน PA หมดอายุภายใน 6 เดือนนี้",
-        "งวดที่ค้างเกิน 60 วันมีกี่งวด",
-        "สัญญาทั้งหมดที่ยังไม่ปิดบัญชี",
-        "ลูกค้าที่ยังไม่ได้ซื้อ PA",
-    ]
-    for ex in examples:
-        if st.button(ex, key=f"ex_{ex}", use_container_width=True):
-            st.session_state.pending_question = ex
-            st.rerun()
+    st.header("ประวัติแชท (Chat History)")
+    if st.button("💬 แชทใหม่ (New Chat)", type="primary", use_container_width=True):
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.rerun()
+        
+    st.divider()
+    
+    try:
+        from db import get_supabase_client
+        client = get_supabase_client()
+        
+        # Load unique sessions for the current user
+        resp = client.table("chat_logs").select("session_id, user_question, created_at").eq("username", st.session_state.username).execute()
+        
+        if resp.data:
+            df_logs = pd.DataFrame(resp.data)
+            if not df_logs.empty:
+                # Sort by created_at to make the first question the title
+                df_logs = df_logs.sort_values("created_at")
+                sessions = df_logs.groupby("session_id").first().reset_index()
+                
+                # Get max created_at for sorting the sidebar list (newest first)
+                max_dates = df_logs.groupby("session_id")["created_at"].max().reset_index()
+                sessions = sessions.merge(max_dates, on="session_id", suffixes=('_first', '_last'))
+                sessions = sessions.sort_values("created_at_last", ascending=False)
+                
+                st.caption("การสนทนาก่อนหน้า")
+                for _, row in sessions.iterrows():
+                    sid = row["session_id"]
+                    title = row["user_question"]
+                    if len(title) > 25:
+                        title = title[:25] + "..."
+                        
+                    # Highlight current session
+                    is_current = (sid == st.session_state.session_id)
+                    btn_text = f"📍 {title}" if is_current else f"📄 {title}"
+                    
+                    if st.button(btn_text, key=f"session_{sid}", use_container_width=True):
+                        if not is_current:
+                            st.session_state.session_id = sid
+                            
+                            # Load messages for this session
+                            chat_resp = client.table("chat_logs").select("*").eq("session_id", sid).order("created_at").execute()
+                            st.session_state.messages = []
+                            for m in chat_resp.data:
+                                st.session_state.messages.append({"role": "user", "content": m["user_question"]})
+                                if m["generated_sql"] or m["natural_answer"]:
+                                    st.session_state.messages.append({
+                                        "role": "assistant",
+                                        "sql": m["generated_sql"],
+                                        "natural_answer": m["natural_answer"],
+                                        "df_json": None,  # We don't save DataFrame, so it won't render
+                                        "error": m["error_message"]
+                                    })
+                            st.rerun()
+    except Exception as e:
+        st.error(f"Cannot load history: {e}")
 
     st.divider()
-    st.caption("Output format (อ่านได้อย่างเดียว)")
+    with st.expander("💡 ตัวอย่างคำถาม", expanded=False):
+        examples = [
+            "มีสัญญาทั้งหมดกี่สัญญา",
+            "ลูกค้าค้างชำระกี่คน",
+            "สรุปสถานะสัญญาทั้งระบบ",
+            "หาลูกค้าชื่อวิชา ผ่อนถึงงวดไหน",
+            "ลูกค้าที่ประกัน PA หมดอายุภายใน 6 เดือนนี้",
+            "งวดที่ค้างเกิน 60 วันมีกี่งวด",
+            "สัญญาทั้งหมดที่ยังไม่ปิดบัญชี",
+            "ลูกค้าที่ยังไม่ได้ซื้อ PA",
+        ]
+        for ex in examples:
+            if st.button(ex, key=f"ex_{ex}", use_container_width=True):
+                st.session_state.pending_question = ex
+                st.rerun()
+
+    st.divider()
+    st.caption("Output format")
     st.code(f"language: {OUTPUT_FORMAT['language']}\n"
             f"table:    {OUTPUT_FORMAT['table_style']}\n"
             f"summary:  {OUTPUT_FORMAT['summary']}", language="yaml")
-            
-    st.divider()
-    if st.button("🧹 ล้างประวัติแชท (Clear Chat)", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Chat history state
 # ──────────────────────────────────────────────────────────────────────
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -231,7 +290,8 @@ if user_input:
             from db import get_supabase_client
             client = get_supabase_client()
             client.table("chat_logs").insert({
-                "username": APP_USER,
+                "session_id": st.session_state.session_id,
+                "username": st.session_state.username,
                 "user_question": user_input,
                 "generated_sql": msg_record.get("sql"),
                 "natural_answer": msg_record.get("natural_answer"),
