@@ -46,13 +46,18 @@ def get_answer_model() -> genai.GenerativeModel:
     return st.session_state.gemini_answer_model
 
 
-def generate_answer(user_question: str):
+def generate_answer(user_question: str, history: list[dict] = None):
     """
     Pass 1: Stream Gemini response (SQL + brief explanation). Yields text chunks.
     """
     model = get_model()
     try:
-        stream = model.generate_content(user_question, stream=True)
+        if history:
+            chat = model.start_chat(history=history)
+            stream = chat.send_message(user_question, stream=True)
+        else:
+            stream = model.generate_content(user_question, stream=True)
+            
         for chunk in stream:
             if chunk.text:
                 yield chunk.text
@@ -80,7 +85,7 @@ def _df_to_summary_text(df: pd.DataFrame, max_rows: int = 15) -> str:
     return f"จำนวนแถวทั้งหมด: {n_rows}\nตัวอย่างข้อมูล:\n{preview}{more_note}"
 
 
-def generate_natural_answer(user_question: str, sql: str, df: pd.DataFrame) -> str:
+def generate_natural_answer(user_question: str, sql: str, df: pd.DataFrame, history: list[dict] = None) -> str:
     """
     Pass 2: Summarize the actual query result into natural Thai language.
     """
@@ -89,7 +94,11 @@ def generate_natural_answer(user_question: str, sql: str, df: pd.DataFrame) -> s
 
     model = get_answer_model()
     try:
-        response = model.generate_content(prompt)
+        if history:
+            chat = model.start_chat(history=history)
+            response = chat.send_message(prompt)
+        else:
+            response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         return f"(สรุปคำตอบไม่สำเร็จ: {str(e)[:200]})"

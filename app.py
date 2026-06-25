@@ -86,6 +86,11 @@ with st.sidebar:
     st.code(f"language: {OUTPUT_FORMAT['language']}\n"
             f"table:    {OUTPUT_FORMAT['table_style']}\n"
             f"summary:  {OUTPUT_FORMAT['summary']}", language="yaml")
+            
+    st.divider()
+    if st.button("🧹 ล้างประวัติแชท (Clear Chat)", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -158,6 +163,13 @@ if not user_input and "pending_question" in st.session_state:
 
 
 if user_input:
+    # Build short-term memory (last 4 messages)
+    gemini_history = []
+    for m in st.session_state.messages[-4:]:
+        role = "user" if m["role"] == "user" else "model"
+        content = m["content"] if role == "user" else (m.get("natural_answer") or "...")
+        gemini_history.append({"role": role, "parts": [content]})
+
     # Show user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
@@ -169,7 +181,7 @@ if user_input:
         with st.status("🧠 กำลังคิด...", expanded=False) as status:
             placeholder = st.empty()
             full_text = ""
-            for chunk in generate_answer(user_input):
+            for chunk in generate_answer(user_input, history=gemini_history):
                 full_text += chunk
                 placeholder.markdown(full_text + "▌")
             placeholder.markdown(full_text)
@@ -200,7 +212,7 @@ if user_input:
             else:
                 # ── Pass 2: turn the real result into a friendly Thai answer ──
                 with st.spinner("✍️ กำลังสรุปคำตอบ..."):
-                    natural_answer = generate_natural_answer(user_input, sql, df)
+                    natural_answer = generate_natural_answer(user_input, sql, df, history=gemini_history)
 
                 st.markdown(natural_answer)
                 render_table(df)
@@ -213,3 +225,17 @@ if user_input:
                     st.code(sql, language="sql")
 
         st.session_state.messages.append(msg_record)
+
+        # ── Long-Term Memory: Save to Supabase ──
+        try:
+            from db import get_supabase_client
+            client = get_supabase_client()
+            client.table("chat_logs").insert({
+                "username": APP_USER,
+                "user_question": user_input,
+                "generated_sql": msg_record.get("sql"),
+                "natural_answer": msg_record.get("natural_answer"),
+                "error_message": msg_record.get("error")
+            }).execute()
+        except Exception as e:
+            st.toast(f"Warning: Failed to save log to Supabase: {e}")

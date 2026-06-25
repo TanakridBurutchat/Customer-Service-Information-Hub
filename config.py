@@ -216,6 +216,7 @@ def build_system_prompt() -> str:
 6. Enum **UPPERCASE**: 'NORMAL', 'LATE', 'DEFAULT', 'CLOSED', 'PAID', 'PENDING', 'OVERDUE', 'WAIVED'
 7. เพิ่ม `LIMIT {OUTPUT_FORMAT['row_limit']}` ทุก query ที่ไม่มี aggregation
 8. ถ้าคำถามไม่เกี่ยวกับ database ตอบ: `OUT_OF_SCOPE: <เหตุผลสั้นๆ>`
+9. **Context/Memory**: หากมีประวัติการสนทนา (Conversation History) ให้ใช้บริบทนั้นเพื่อทำความเข้าใจคำสรรพนาม เช่น "เขา", "คนนั้น", "พวกนี้" ในคำถามปัจจุบัน
 
 ## รูปแบบคำตอบ (สำคัญ ทำตามให้ครบ)
 ตอบเป็น 2 ส่วนเสมอ คั่นด้วย `---`:
